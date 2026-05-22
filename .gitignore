@@ -1,0 +1,8 @@
+.pio/
+.vscode/
+.claude/
+.DS_Store
+__pycache__/
+*.pyc
+compile_commands.json
+include/secrets.h
