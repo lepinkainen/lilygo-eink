@@ -1,0 +1,13 @@
+[project]
+name = "lilygo-render"
+version = "0.1.0"
+description = "Server that renders the LilyGo T5 4.7\" weather display image"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=10.4.0",
+    "requests>=2.32.0",
+    "numpy>=1.26.0",
+]
+
+[tool.uv]
+package = false

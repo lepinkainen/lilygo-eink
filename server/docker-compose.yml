@@ -1,0 +1,13 @@
+services:
+  lilygo-render:
+    build: .
+    image: lilygo-render:latest
+    container_name: lilygo-render
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Edit config.toml on the host; the container picks it up on next render.
+      - ./config.toml:/app/config.toml:ro
+    environment:
+      TZ: Europe/Helsinki

@@ -1,0 +1,28 @@
+# Copy to config.toml and fill in. Local-only, gitignored.
+
+[server]
+# Bind host/port for the HTTP server that the device polls.
+host = "0.0.0.0"
+port = 8080
+# How often to re-render in seconds. met.no responses are still cached via
+# If-Modified-Since, so most ticks are cheap 304s.
+render_interval_s = 900
+
+[location]
+# Where met.no fetches the forecast for. Display also shows this label.
+name = "Jarvenpaa"
+lat = "60.4664"
+lon = "25.0900"
+timezone = "Europe/Helsinki"
+
+[metno]
+# met.no requires an identifying contact in User-Agent or returns 403.
+user_agent = "lilygo-weather/0.1 you@example.com"
+
+[ha]
+# Home Assistant base URL and a long-lived access token. Leave token empty
+# to disable HA integration; the indoor temperature panel will show "--".
+base_url = "http://homeassistant.local:8123"
+token = ""
+# Entity that holds the indoor temperature reading.
+entity_indoor = "sensor.living_room_temperature"
