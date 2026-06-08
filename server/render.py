@@ -227,8 +227,6 @@ def _draw_footer(
     if snap is not None:
         local = snap.updated.astimezone(tz)
         draw.text((24, y), f"met.no {local.strftime('%H:%M')}", font=font, fill=80)
-    served = dt.datetime.now(tz).strftime("%H:%M:%S")
-    draw.text((WIDTH - 24, y), f"rendered {served}", font=font, fill=80, anchor="ra")
 
 
 # ---------- packing ----------
