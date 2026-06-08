@@ -6,8 +6,22 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    # Two ways to configure:
+    #   (a) bind-mount config.toml from the host (default, shown below), or
+    #   (b) drop the volume and inline every setting via LILYGO_* env vars
+    #       (handy for Portainer where editing files on the host is awkward).
+    #   Env > config.toml > built-in default, so you can also mix both.
     volumes:
       # Edit config.toml on the host; the container picks it up on next render.
       - ./config.toml:/app/config.toml:ro
     environment:
       TZ: Europe/Helsinki
+      # --- (b) Portainer-friendly env-only config ---
+      # LILYGO_LOCATION__NAME: Jarvenpaa
+      # LILYGO_LOCATION__LAT: "60.4664"
+      # LILYGO_LOCATION__LON: "25.0900"
+      # LILYGO_LOCATION__TIMEZONE: Europe/Helsinki
+      # LILYGO_METNO__EMAIL: you@example.com
+      # LILYGO_HA__BASE_URL: http://homeassistant.local:8123
+      # LILYGO_HA__TOKEN: ""              # leave empty to disable HA
+      # LILYGO_HA__ENTITY_INDOOR: sensor.living_room_temperature

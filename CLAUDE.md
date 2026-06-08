@@ -132,4 +132,4 @@ Mainstream clang-tidy was tried but cannot parse the ESP32-S3 SDK on a macOS hos
 
 `include/secrets.h` (firmware) and `server/config.toml` (server) are both gitignored. Templates: `include/secrets.h.example` and `server/config.toml.example`.
 
-Firmware secrets are minimal now: Wi-Fi credentials + `EINK_URL`. Everything else (lat/lon, met.no contact, HA URL + token) lives in `server/config.toml`.
+Firmware secrets are minimal now: Wi-Fi credentials + `EINK_URL`. Everything else (lat/lon, met.no contact email, HA URL + token) lives in `server/config.toml` — or can be supplied via `LILYGO_<SECTION>__<KEY>` env vars (env wins over file, double-underscore between section and key). `server/config.toml` is optional when env vars cover the required keys (`location.lat`, `location.lon`, `metno.email`). Config is parsed by `pydantic-settings`; the User-Agent sent to met.no is built as `lilygo-eink/<VERSION> <metno.email>`, so only the email is configurable. See `server/README.md` for the full mapping.

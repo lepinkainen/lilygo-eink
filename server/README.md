@@ -45,6 +45,25 @@ docker logs -f lilygo-render
 
 For Portainer: add a new stack pointing at this repo's `server/docker-compose.yml`, or paste the compose contents into the web editor. `config.toml` is bind-mounted read-only from the host, so editing it and running `docker compose restart lilygo-render` (or restarting the container in Portainer) is enough to pick up changes.
 
+## Configuration
+
+Every setting can come from a `config.toml` file or from env vars; env wins. `config.toml` is optional when env vars cover the required keys (`location.lat`, `location.lon`, `metno.email`).
+
+Env-var pattern: `LILYGO_<SECTION>__<KEY>` (uppercased, double underscore between section and key — single `_` is ambiguous because some keys contain it). Examples:
+
+| TOML | Env var |
+| --- | --- |
+| `location.lat` | `LILYGO_LOCATION__LAT` |
+| `location.lon` | `LILYGO_LOCATION__LON` |
+| `metno.email` | `LILYGO_METNO__EMAIL` |
+| `server.port` | `LILYGO_SERVER__PORT` |
+| `server.render_interval_s` | `LILYGO_SERVER__RENDER_INTERVAL_S` |
+| `ha.token` | `LILYGO_HA__TOKEN` |
+
+The met.no User-Agent is built as `lilygo-eink/<version> <email>`; only supply the email, not the whole UA string.
+
+For Portainer, the env-only path avoids bind-mounting a host file: drop the `volumes:` block from `docker-compose.yml` and uncomment the `LILYGO_*` env block at the bottom of the same file.
+
 ## Iterate on layout
 
 Run `uv run app.py --preview /tmp/prev.png` after each edit to `render.py`. The preview is the same image (composed in grayscale L mode) that the device would receive, so what you see on the PNG is what you'll see on the panel — minus the EPD's slight contrast quirks.
