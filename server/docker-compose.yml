@@ -1,7 +1,10 @@
 services:
   lilygo-render:
-    build: .
-    image: lilygo-render:latest
+    # Pull the prebuilt multi-arch image published by .github/workflows/server-release.yml.
+    # For local development against unpushed changes, comment `image:` and
+    # uncomment `build: .` to rebuild from the local Dockerfile instead.
+    image: ghcr.io/lepinkainen/lilygo-eink-server:latest
+    # build: .
     container_name: lilygo-render
     restart: unless-stopped
     ports:
