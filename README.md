@@ -9,7 +9,7 @@ E-paper weather display for a LILYGO T5 4.7" V2.3 (ESP32-S3, 960×540 grayscale)
 - **`server/`** — Python service. Fetches [api.met.no](https://api.met.no/) + optional Home Assistant sensor states, renders 960×540 grayscale with Pillow, packs to 4-bit (259200 B), serves over HTTP as `/eink.bin`. Docker image published to `ghcr.io/lepinkainen/lilygo-eink-server`. See [`server/README.md`](server/README.md).
 - **`src/main.cpp`** — Arduino-framework firmware. Streams the HTTP response straight into the EPD framebuffer, no JSON parsing on-device. Built with PlatformIO.
 
-Split deliberately so layout iteration doesn't require a re-flash. Sibling of [`../yellow`](../yellow) (CYD/TFT variant; on-device rendering).
+Split deliberately so layout iteration doesn't require a re-flash.
 
 ## Quick start
 
