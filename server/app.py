@@ -14,11 +14,18 @@ import pathlib
 import sys
 import threading
 import time
-import tomllib
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import io
+
+from pydantic import BaseModel
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 
 from ha import HAClient, IndoorReading
 from metno import MetNoClient
@@ -26,6 +33,75 @@ from render import PACKED_SIZE, render, unpack_4bit
 
 
 log = logging.getLogger(__name__)
+
+VERSION = "0.1"
+
+
+class ServerCfg(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8080
+    render_interval_s: int = 900
+    min_render_interval_s: int = 60
+
+
+class LocationCfg(BaseModel):
+    name: str = ""
+    lat: str
+    lon: str
+    timezone: str = "UTC"
+
+
+class MetnoCfg(BaseModel):
+    # met.no requires an identifying contact in User-Agent or returns 403.
+    # We build the UA as "lilygo-eink/<VERSION> <email>".
+    email: str
+
+
+class HaCfg(BaseModel):
+    base_url: str = ""
+    token: str = ""
+    entity_indoor: str = ""
+
+
+class Settings(BaseSettings):
+    """Config loaded from env vars + config.toml.
+
+    Precedence: env > config.toml > field default.
+    Env vars use the LILYGO_ prefix with `__` as the section/key delimiter
+    (single `_` is ambiguous because some keys themselves contain `_`):
+
+        LILYGO_LOCATION__LAT, LILYGO_METNO__EMAIL,
+        LILYGO_SERVER__RENDER_INTERVAL_S, LILYGO_HA__TOKEN, ...
+    """
+
+    server: ServerCfg = ServerCfg()
+    location: LocationCfg
+    metno: MetnoCfg
+    ha: HaCfg = HaCfg()
+
+    model_config = SettingsConfigDict(
+        env_prefix="LILYGO_",
+        env_nested_delimiter="__",
+        toml_file="config.toml",
+        extra="ignore",
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # env first → highest precedence; toml second; init kwargs last
+        # so callers passing toml_file=... can still override the location.
+        return (
+            env_settings,
+            TomlConfigSettingsSource(settings_cls),
+            init_settings,
+        )
 
 
 class State:
@@ -44,13 +120,13 @@ class State:
         self.render_lock = threading.Lock()
 
 
-def _load_config(path: pathlib.Path) -> dict:
-    if not path.is_file():
-        raise SystemExit(
-            f"missing {path}. copy config.toml.example to config.toml and fill it in."
-        )
-    with path.open("rb") as f:
-        return tomllib.load(f)
+def _load_settings(toml_path: pathlib.Path) -> Settings:
+    # Point pydantic-settings at the requested TOML path. The file is
+    # optional: env vars alone can satisfy the schema.
+    if not toml_path.is_file():
+        log.info("no %s found; relying on LILYGO_* env vars", toml_path)
+    Settings.model_config["toml_file"] = str(toml_path)
+    return Settings()
 
 
 def _tick(
@@ -215,21 +291,16 @@ def _make_handler(
     return Handler
 
 
-def _build_clients(cfg: dict) -> tuple[MetNoClient, HAClient, str, dt.tzinfo]:
-    loc = cfg["location"]
-    metno = MetNoClient(
-        lat=loc["lat"],
-        lon=loc["lon"],
-        user_agent=cfg["metno"]["user_agent"],
-    )
-    ha_cfg = cfg.get("ha", {})
+def _build_clients(s: Settings) -> tuple[MetNoClient, HAClient, str, dt.tzinfo]:
+    user_agent = f"lilygo-eink/{VERSION} {s.metno.email}"
+    metno = MetNoClient(lat=s.location.lat, lon=s.location.lon, user_agent=user_agent)
     ha = HAClient(
-        base_url=ha_cfg.get("base_url", ""),
-        token=ha_cfg.get("token", ""),
-        entity=ha_cfg.get("entity_indoor", ""),
+        base_url=s.ha.base_url,
+        token=s.ha.token,
+        entity=s.ha.entity_indoor,
     )
-    tz = zoneinfo.ZoneInfo(loc.get("timezone", "UTC"))
-    return metno, ha, loc.get("name", ""), tz
+    tz = zoneinfo.ZoneInfo(s.location.timezone)
+    return metno, ha, s.location.name, tz
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -247,8 +318,8 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    cfg = _load_config(args.config)
-    metno, ha, location_name, tz = _build_clients(cfg)
+    settings = _load_settings(args.config)
+    metno, ha, location_name, tz = _build_clients(settings)
     state = State()
 
     if args.preview is not None:
@@ -257,10 +328,10 @@ def main(argv: list[str] | None = None) -> int:
         log.info("wrote preview to %s", args.preview)
         return 0
 
-    interval_s = int(cfg["server"].get("render_interval_s", 900))
-    min_render_interval_s = int(cfg["server"].get("min_render_interval_s", 60))
-    host = cfg["server"].get("host", "0.0.0.0")
-    port = int(cfg["server"].get("port", 8080))
+    interval_s = settings.server.render_interval_s
+    min_render_interval_s = settings.server.min_render_interval_s
+    host = settings.server.host
+    port = settings.server.port
 
     # Background loop now acts as a safety net: keeps the buffer fresh if
     # no GETs arrive for a while (e.g. device offline). On-GET rendering

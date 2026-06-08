@@ -1,4 +1,13 @@
 # Copy to config.toml and fill in. Local-only, gitignored.
+#
+# Every key here can also be supplied via env vars using the pattern
+#   LILYGO_<SECTION>__<KEY>   (uppercased, double underscore between
+#   section and key — single `_` is ambiguous because some keys contain it).
+# Examples: LILYGO_METNO__EMAIL, LILYGO_LOCATION__LAT,
+#           LILYGO_SERVER__RENDER_INTERVAL_S, LILYGO_HA__TOKEN.
+# Precedence: env var > config.toml > built-in default.
+# config.toml is optional when env vars cover the required keys
+# (location.lat, location.lon, metno.email).
 
 [server]
 # Bind host/port for the HTTP server that the device polls.
@@ -21,7 +30,8 @@ timezone = "Europe/Helsinki"
 
 [metno]
 # met.no requires an identifying contact in User-Agent or returns 403.
-user_agent = "lilygo-weather/0.1 you@example.com"
+# UA is built as "lilygo-eink/<version> <email>"; supply your email here.
+email = "you@example.com"
 
 [ha]
 # Home Assistant base URL and a long-lived access token. Leave token empty
