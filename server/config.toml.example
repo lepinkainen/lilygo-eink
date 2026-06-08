@@ -7,6 +7,10 @@ port = 8080
 # How often to re-render in seconds. met.no responses are still cached via
 # If-Modified-Since, so most ticks are cheap 304s.
 render_interval_s = 900
+# Floor for on-GET re-rendering: a request will trigger a fresh render
+# only if the cached buffer is older than this many seconds. Browser
+# auto-refresh and burst polls within the window reuse the cache.
+min_render_interval_s = 60
 
 [location]
 # Where met.no fetches the forecast for. Display also shows this label.

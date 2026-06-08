@@ -13,6 +13,7 @@ import logging
 import pathlib
 import sys
 import threading
+import time
 import tomllib
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +36,12 @@ class State:
         # Start fully white so a poll during the first render returns valid bytes.
         self.buf: bytes = bytes([0xFF] * PACKED_SIZE)
         self.last_modified: str = email.utils.formatdate(usegmt=True)
+        # Monotonic timestamp of the last successful render. Used by the
+        # on-GET render path to throttle: a burst of polls within
+        # min_render_interval_s reuses the cached buffer.
+        self.last_render_monotonic: float = 0.0
+        # Guards _tick from running concurrently when multiple GETs race.
+        self.render_lock = threading.Lock()
 
 
 def _load_config(path: pathlib.Path) -> dict:
@@ -63,6 +70,7 @@ def _tick(
     with state.lock:
         state.buf = buf
         state.last_modified = email.utils.formatdate(usegmt=True)
+        state.last_render_monotonic = time.monotonic()
     log.info(
         "rendered: temp=%s indoor=%s sym=%s",
         snap.temp if snap else "n/a",
@@ -86,18 +94,49 @@ def _schedule_loop(
         threading.Event().wait(interval_s)
 
 
-def _make_handler(state: State):
+def _make_handler(
+    state: State,
+    metno: MetNoClient,
+    ha: HAClient,
+    location_name: str,
+    tz: dt.tzinfo,
+    min_render_interval_s: int,
+):
+    def _maybe_render() -> None:
+        # Coalesce concurrent GETs: only one render runs at a time.
+        # Inside the lock we re-check the age so the second caller through
+        # the door reuses the buffer the first caller just produced.
+        with state.render_lock:
+            with state.lock:
+                age = time.monotonic() - state.last_render_monotonic
+            if age < min_render_interval_s:
+                return
+            _tick(state, metno, ha, location_name, tz)
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args) -> None:  # noqa: A002
             log.info("%s - %s", self.address_string(), format % args)
 
+        def handle_one_request(self) -> None:
+            # The ESP32 client occasionally closes the socket immediately
+            # after reading the 259200-byte body, before our wfile.write
+            # has fully drained into the kernel. Treat that as success
+            # rather than dumping a stack trace.
+            try:
+                super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                log.debug("client disconnected mid-response: %s", exc)
+
         def do_GET(self) -> None:  # noqa: N802 — http.server contract
             path = self.path.split("?", 1)[0]
             if path == "/eink.bin":
+                _maybe_render()
                 self._serve_raw()
             elif path == "/preview.png":
+                _maybe_render()
                 self._serve_preview()
             elif path in ("/", "/index.html"):
+                _maybe_render()
                 self._serve_index()
             else:
                 self.send_error(404, "not found")
@@ -219,16 +258,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     interval_s = int(cfg["server"].get("render_interval_s", 900))
+    min_render_interval_s = int(cfg["server"].get("min_render_interval_s", 60))
     host = cfg["server"].get("host", "0.0.0.0")
     port = int(cfg["server"].get("port", 8080))
 
+    # Background loop now acts as a safety net: keeps the buffer fresh if
+    # no GETs arrive for a while (e.g. device offline). On-GET rendering
+    # is throttled by min_render_interval_s so bursty polls don't hammer
+    # met.no/HA.
     threading.Thread(
         target=_schedule_loop,
         args=(state, metno, ha, interval_s, location_name, tz),
         daemon=True,
     ).start()
 
-    server = ThreadingHTTPServer((host, port), _make_handler(state))
+    server = ThreadingHTTPServer(
+        (host, port),
+        _make_handler(state, metno, ha, location_name, tz, min_render_interval_s),
+    )
     log.info("listening on %s:%d", host, port)
     try:
         server.serve_forever()
