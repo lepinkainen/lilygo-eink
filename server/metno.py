@@ -47,6 +47,9 @@ class MetNoClient:
         self.user_agent = user_agent
         self._last_modified: Optional[str] = None
         self._last_snapshot: Optional[WeatherSnapshot] = None
+        # Health of the most recent fetch (a 304 counts as healthy).
+        self.last_ok: Optional[dt.datetime] = None
+        self.last_error: Optional[str] = None
 
     def fetch(self) -> Optional[WeatherSnapshot]:
         """Return a snapshot, possibly the cached one if upstream sent 304.
@@ -65,13 +68,16 @@ class MetNoClient:
             r = requests.get(self.url, headers=headers, timeout=15)
         except requests.RequestException as e:
             log.warning("met.no request failed: %s", e)
+            self.last_error = f"request failed: {type(e).__name__}"
             return self._last_snapshot
 
         if r.status_code == 304:
             log.info("met.no: 304 not modified")
+            self._ok()
             return self._last_snapshot
         if r.status_code != 200:
             log.warning("met.no HTTP %d", r.status_code)
+            self.last_error = f"HTTP {r.status_code}"
             return self._last_snapshot
 
         self._last_modified = r.headers.get("Last-Modified") or self._last_modified
@@ -80,10 +86,16 @@ class MetNoClient:
             snap = _parse(r.json())
         except Exception as e:
             log.exception("met.no parse failed: %s", e)
+            self.last_error = "parse failed"
             return self._last_snapshot
 
         self._last_snapshot = snap
+        self._ok()
         return snap
+
+    def _ok(self) -> None:
+        self.last_ok = dt.datetime.now(dt.timezone.utc)
+        self.last_error = None
 
 
 def _parse(payload: dict) -> WeatherSnapshot:

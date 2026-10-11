@@ -94,6 +94,7 @@ def render(
     indoor: IndoorReading,
     location_name: str,
     timezone: dt.tzinfo,
+    error: Optional[str] = None,
 ) -> bytes:
     """Return 259200 bytes of 4-bit packed grayscale ready for the EPD."""
     img = Image.new("L", (WIDTH, HEIGHT), 255)
@@ -116,6 +117,8 @@ def render(
         )
     _draw_indoor(draw, indoor)
     _draw_footer(draw, snap, timezone)
+    if error:
+        _draw_error_banner(draw, error)
 
     return _pack_4bit(img)
 
@@ -227,6 +230,19 @@ def _draw_footer(
     if snap is not None:
         local = snap.updated.astimezone(tz)
         draw.text((24, y), f"met.no {local.strftime('%H:%M')}", font=font, fill=80)
+
+
+def _draw_error_banner(draw: ImageDraw.ImageDraw, text: str) -> None:
+    """Solid black bar across the bottom; stale data stays visible above it."""
+    h = 40
+    draw.rectangle([(0, HEIGHT - h), (WIDTH, HEIGHT)], fill=0)
+    draw.text(
+        (WIDTH // 2, HEIGHT - h // 2),
+        text,
+        font=_font("FiraSans-Bold.ttf", 28),
+        fill=255,
+        anchor="mm",
+    )
 
 
 # ---------- packing ----------

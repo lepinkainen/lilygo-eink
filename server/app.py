@@ -138,8 +138,16 @@ def _tick(
 ) -> None:
     snap = metno.fetch()
     indoor = ha.fetch_indoor()
+    error = None
+    if metno.last_error:
+        since = (
+            f"last update {metno.last_ok.astimezone(tz).strftime('%H:%M')}"
+            if metno.last_ok
+            else "no data yet"
+        )
+        error = f"WEATHER DATA UNAVAILABLE \u2014 {since}"
     try:
-        buf = render(snap, indoor, location_name, tz)
+        buf = render(snap, indoor, location_name, tz, error)
     except Exception:
         log.exception("render failed; keeping previous frame")
         return
@@ -148,10 +156,11 @@ def _tick(
         state.last_modified = email.utils.formatdate(usegmt=True)
         state.last_render_monotonic = time.monotonic()
     log.info(
-        "rendered: temp=%s indoor=%s sym=%s",
+        "rendered: temp=%s indoor=%s sym=%s metno_err=%s",
         snap.temp if snap else "n/a",
         indoor.value if indoor.value is not None else "n/a",
         snap.symbol_now if snap else "n/a",
+        metno.last_error or "none",
     )
 
 
