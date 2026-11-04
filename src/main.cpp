@@ -6,6 +6,7 @@
 
 #include "epd_driver.h"
 #include "firasans.h"
+#include "utilities.h"
 
 #include "secrets.h"
 
@@ -31,6 +32,9 @@ static const int FETCH_RETRIES = 3;
 static const uint32_t RETRY_BACKOFF_MS = 2000;
 
 static uint8_t* g_fb = nullptr;
+
+// Measured once per cycle, before Wi-Fi starts (see readBatteryVolts).
+static float g_battery_volts = 0.0f;
 
 // Last failure reason — populated by connectWiFi/fetchImage so the error
 // screen can show why the device failed. Static-sized to keep it usable
@@ -79,8 +83,12 @@ static int fetchImage(uint8_t* out, size_t out_size) {
   WiFiClient client;
   client.setTimeout(15);
 
+  // The server draws the battery gauge from this reading.
+  char url[sizeof(EINK_URL) + 16];
+  snprintf(url, sizeof(url), "%s?batt=%.2f", EINK_URL, g_battery_volts);
+
   HTTPClient http;
-  if (!http.begin(client, EINK_URL)) {
+  if (!http.begin(client, url)) {
     snprintf(g_last_error, sizeof(g_last_error),
              "http.begin failed\nURL: %s", EINK_URL);
     return -1;
@@ -176,11 +184,28 @@ static void drawErrorScreen(const char* reason) {
   write_string((GFXfont*)&FiraSans, (char*)reason, &cx, &cy, g_fb);
 
   cx = 40; cy = EPD_HEIGHT - 60;
-  snprintf(line, sizeof(line), "boot #%lu  uptime %lus",
-           (unsigned long)g_boot_count, (unsigned long)(millis() / 1000));
+  snprintf(line, sizeof(line), "boot #%lu  uptime %lus  battery %.2f V",
+           (unsigned long)g_boot_count, (unsigned long)(millis() / 1000),
+           g_battery_volts);
   write_string((GFXfont*)&FiraSans, line, &cx, &cy, g_fb);
 
   flushEpd();
+}
+
+// Battery voltage in volts, read through the board's 100k/100k divider.
+// Panel power must be on for the reading, and GPIO14 is on ADC2, which
+// Wi-Fi claims, so call this while Wi-Fi is off. With USB attached this
+// reflects the charger, not the battery's state of charge.
+static float readBatteryVolts() {
+  static const int SAMPLES = 8;
+  epd_poweron();
+  delay(10);
+  uint32_t mv = 0;
+  for (int i = 0; i < SAMPLES; i++) {
+    mv += analogReadMilliVolts(BATT_PIN);
+  }
+  epd_poweroff();
+  return (float)(mv / SAMPLES) * 2.0f / 1000.0f;
 }
 
 static bool initHardware() {
@@ -225,6 +250,9 @@ static int fetchWithRetry() {
 static void cycle() {
   g_boot_count++;
   Serial.printf("\n=== cycle %lu ===\n", (unsigned long)g_boot_count);
+
+  g_battery_volts = readBatteryVolts();
+  Serial.printf("battery %.2f V\n", g_battery_volts);
 
   int r = fetchWithRetry();
 
