@@ -14,7 +14,7 @@ Sibling project of `../yellow` (CYD/TFT version). `../yellow` does everything on
 
 ## Toolchain
 
-PlatformIO is installed via `uv tool install platformio`. `pio` is on PATH. pyserial is available via `uvx --from pyserial python ...` — there is no project-level Python environment for the firmware side. The server has its own `uv` project in `server/`.
+PlatformIO is installed via mise (`mise use -g pipx:platformio@latest`). `pio` is on PATH. pyserial is available via `uvx --from pyserial python ...` — there is no project-level Python environment for the firmware side. The server has its own `uv` project in `server/`.
 
 The first `pio run` downloads ~150 MB of toolchains and clones `LilyGo-EPD47` from GitHub into `.pio/libdeps/`. Subsequent builds are fast (~5 s incremental).
 
@@ -108,6 +108,14 @@ Single-file firmware state machine. One `setup()` pass:
 The main dev advantage of the split architecture: edit `server/render.py` → `uv run app.py --preview /tmp/p.png` → open the PNG → repeat. No firmware re-flash. The preview path uses the same pack-then-unpack roundtrip that the device sees, so what's in the PNG is what'll be on the panel.
 
 When the layout is right, push a new server image (`docker compose up -d --build` on the host) and the device picks it up on the next 15-min wake automatically — no firmware change needed.
+
+## Battery
+
+The board has a charger (HX6610S, USB charges the cell with no firmware involved) but no fuel gauge, and the charge-status outputs only drive LEDs, so firmware can read voltage and nothing else. `readBatteryVolts()` reads GPIO14 through a 100k/100k divider. It runs before Wi-Fi at the start of each cycle because the panel supply must be on for the reading and GPIO14 is on ADC2, which Wi-Fi claims.
+
+The firmware sends the reading as `/eink.bin?batt=3.92` and also prints it on its own error screen. The server keeps the latest value in `State`, re-renders inside the `min_render_interval_s` throttle if the displayed value changed, and hides the gauge after `battery_stale_s`. `render.py` owns the voltage-to-percent curve and the header gauge; preview a state with `uv run app.py --preview /tmp/p.png --battery 3.85`.
+
+With no battery fitted, USB reads about 4.22 V, so a single reading can't separate "no battery", "charging near full" and "freshly charged". A cell on battery measured 4.17 V straight after unplugging, so at or above `BATTERY_EXTERNAL_V` (4.19 V) the gauge shows a bolt instead of a percentage.
 
 ## Server architecture
 
