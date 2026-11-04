@@ -52,18 +52,22 @@ uv sync                         # install deps
 cp config.toml.example config.toml  # then edit
 uv run app.py                   # serve on :8080
 uv run app.py --preview /tmp/p.png  # render once, save PNG, exit
-docker compose up -d --build    # deploy as container
+docker compose up -d            # deploy as container (pulls the GHCR image)
 ```
 
 ## Hardware quirks
 
 - USB-serial port: `/dev/cu.usbmodem101` (ESP32-S3 native USB-JTAG/serial, VID `0x303a` / PID `0x1001`). No CH340/CP210x driver needed.
 - Native USB-CDC: no DTR/RTS download-mode trap (unlike yellow). `scripts/monitor.py` is intentionally minimal — open the port, read bytes. The running firmware deep-sleeps and the CDC device disappears for ~15 min between wakes; that's normal.
-- The `DEBUG_NO_SLEEP=1` build flag (set in `platformio.ini`) keeps the chip awake and runs `cycle()` from `loop()` instead of deep-sleeping. The USB-CDC port stays enumerated, so iterating is fast. Comment it out for production.
+- The `DEBUG_NO_SLEEP=1` build flag (in `platformio.ini`) keeps the chip awake and runs `cycle()` from `loop()` every 30 s instead of deep-sleeping. The USB-CDC port stays enumerated, so iterating is fast. It is commented out in the committed file; keep it that way for production.
+- Buttons, left to right along the top edge of the back with USB on the left: `RST`, `BOOT` (GPIO0), `SENSOR_VN` (GPIO21, user button).
+- While the firmware is awake and the port is up, `pio run -t upload` enters the bootloader by itself, no buttons needed.
+- Some USB-C cables give unreliable or no data, which looks like a port that flaps or never appears. Rule out the cable first.
 
 ## Troubleshooting
 
-- **`/dev/cu.usbmodem101` missing after deep sleep**: the native USB-CDC peripheral powers down with the rest of the chip. Hold `BOOT` (GPIO0) while replugging USB to force the ROM bootloader — the port reappears and stays alive until the next reset. `pio run -t upload` then works.
+- **`/dev/cu.usbmodem101` missing after deep sleep**: the native USB-CDC peripheral powers down with the rest of the chip. Hold `BOOT`, tap `RST`, release `BOOT` to force the ROM bootloader — the port reappears and stays alive until the next reset. `pio run -t upload` then works. Replugging USB while holding `BOOT` only works with no battery attached, because the battery keeps the chip powered through the replug.
+- **Port missing while the firmware should be awake**: a `DEBUG_NO_SLEEP` build keeps the port up, so this means a cable or connection problem, not sleep.
 - **`pio device monitor` errors with `termios.error: Operation not supported by device`**: harness limitation. Use `uvx --from pyserial python scripts/monitor.py [seconds]` instead.
 - **Display shows last image after restart**: expected. E-paper is bistable; we only push to the panel on a 200 response. On 304 or any error we leave it alone, so the device "looks like it's working" even when the server is down.
 - **Server-rendered preview looks fine but device shows garbage**: pack order. The wire format is two pixels per byte, **low nibble = even column**. If you change `render.py:_pack_4bit`, also re-check `epd_driver.c:695` for the lib's expectation.
@@ -96,7 +100,7 @@ Single-file firmware state machine. One `setup()` pass:
 
 - Init Serial, increment `g_boot_count`, init EPD, allocate framebuffer in PSRAM.
 - Wi-Fi connect → `fetchImage()` which GETs `EINK_URL`, honors `If-Modified-Since`, streams the response into `g_fb`.
-- On 200: optional `epd_clear()` every 8th wake, then `epd_draw_grayscale_image(epd_full_screen(), g_fb)`, `epd_poweroff()`.
+- On 200: `epd_clear()`, then `epd_draw_grayscale_image(epd_full_screen(), g_fb)`, `epd_poweroff()`.
 - On 304: skip flush, panel keeps its last image.
 - On error: skip flush, log, sleep — the panel keeps its last image.
 - Disconnect Wi-Fi, enter deep sleep for 15 min.
@@ -107,7 +111,9 @@ Single-file firmware state machine. One `setup()` pass:
 
 The main dev advantage of the split architecture: edit `server/render.py` → `uv run app.py --preview /tmp/p.png` → open the PNG → repeat. No firmware re-flash. The preview path uses the same pack-then-unpack roundtrip that the device sees, so what's in the PNG is what'll be on the panel.
 
-When the layout is right, push a new server image (`docker compose up -d --build` on the host) and the device picks it up on the next 15-min wake automatically — no firmware change needed.
+To test on the real panel, run the server on the dev machine and point the board at it: set `EINK_URL` in `include/secrets.h` to the machine's LAN address, enable `DEBUG_NO_SLEEP`, and flash. The board then polls every 30 s and render changes only need a server restart (the server doesn't auto-reload). met.no returns 403 for placeholder contacts such as `you@example.com`, so `server/config.toml` needs a real `metno.email`. Restore `EINK_URL` and turn `DEBUG_NO_SLEEP` off before the production flash.
+
+When the layout is right, push to `main`. `.github/workflows/server-release.yml` builds `ghcr.io/lepinkainen/lilygo-eink-server` on any push touching `server/**`, tagging `latest` and `sha-<short>`. Re-pull that image on the host and the device picks it up on its next wake, no firmware change needed. The package is public, so a `denied` error on pull means the client is sending a stale registry credential.
 
 ## Battery
 
