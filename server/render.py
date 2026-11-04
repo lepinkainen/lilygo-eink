@@ -31,6 +31,24 @@ ROOT = pathlib.Path(__file__).resolve().parent
 FONTS = ROOT / "fonts"
 ICONS = ROOT / "icons"
 
+# Resting Li-ion voltage -> approximate charge. Voltage is the only signal the
+# board offers (no fuel gauge), so treat the result as an estimate.
+BATTERY_CURVE = [
+    (3.30, 0),
+    (3.50, 5),
+    (3.60, 10),
+    (3.70, 30),
+    (3.80, 50),
+    (3.90, 65),
+    (4.00, 80),
+    (4.10, 90),
+    (4.20, 100),
+]
+# At or above this the charger may be holding the rail (about 4.2 V even with
+# no battery fitted), so a percentage would be meaningless.
+BATTERY_EXTERNAL_V = 4.19
+BATTERY_LOW_PERCENT = 15
+
 
 @lru_cache(maxsize=8)
 def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
@@ -95,6 +113,7 @@ def render(
     location_name: str,
     timezone: dt.tzinfo,
     error: Optional[str] = None,
+    battery_volts: Optional[float] = None,
 ) -> bytes:
     """Return 259200 bytes of 4-bit packed grayscale ready for the EPD."""
     img = Image.new("L", (WIDTH, HEIGHT), 255)
@@ -102,7 +121,7 @@ def render(
 
     now_local = dt.datetime.now(timezone)
 
-    _draw_header(draw, location_name, now_local)
+    _draw_header(draw, location_name, now_local, battery_volts)
     if snap is not None:
         _draw_current(img, draw, snap)
         _draw_stats(draw, snap)
@@ -125,11 +144,74 @@ def render(
 
 # ---------- regions ----------
 
-def _draw_header(draw: ImageDraw.ImageDraw, location: str, now: dt.datetime) -> None:
+def battery_percent(volts: float) -> int:
+    """Estimated charge, rounded to 5% because voltage can't resolve finer."""
+    points = BATTERY_CURVE
+    if volts <= points[0][0]:
+        return 0
+    for (v0, p0), (v1, p1) in zip(points, points[1:]):
+        if volts <= v1:
+            percent = p0 + (p1 - p0) * (volts - v0) / (v1 - v0)
+            return int(5 * round(percent / 5))
+    return 100
+
+
+def battery_key(volts: Optional[float]) -> Optional[str]:
+    """What the panel shows for this reading; equal keys draw identically."""
+    if volts is None:
+        return None
+    if volts >= BATTERY_EXTERNAL_V:
+        return "external"
+    return str(battery_percent(volts))
+
+
+def _draw_battery(draw: ImageDraw.ImageDraw, volts: float, right: int) -> None:
+    """Battery gauge whose right edge sits at `right`, in the header band."""
+    w, h, nub = 52, 26, 5
+    top = 21
+    body_right = right - nub
+    left = body_right - w
+    draw.rectangle([(body_right, top + 7), (right, top + h - 7)], fill=0)
+    draw.rectangle([(left, top), (body_right, top + h)], outline=0, width=3)
+    inner_left, inner_right = left + 6, body_right - 6
+    inner_top, inner_bottom = top + 6, top + h - 6
+
+    key = battery_key(volts)
+    if key == "external":
+        # Filled gauge with a white bolt: charger attached or just topped up.
+        draw.rectangle([(inner_left, inner_top), (inner_right, inner_bottom)], fill=0)
+        cx = (left + body_right) // 2
+        draw.polygon(
+            [(cx + 5, top + 4), (cx - 9, top + 15), (cx - 1, top + 15),
+             (cx - 5, top + h - 4), (cx + 9, top + 11), (cx + 1, top + 11)],
+            fill=255,
+        )
+        return
+
+    percent = int(key)
+    fill_w = round((inner_right - inner_left) * percent / 100)
+    if fill_w > 0:
+        draw.rectangle(
+            [(inner_left, inner_top), (inner_left + fill_w, inner_bottom)], fill=0
+        )
+    low = percent <= BATTERY_LOW_PERCENT
+    label = f"LOW {percent}%" if low else f"{percent}%"
+    font = _font("FiraSans-Bold.ttf" if low else "FiraSans-Regular.ttf", 30)
+    draw.text((left - 8, top + h // 2), label, font=font, fill=0, anchor="rm")
+
+
+def _draw_header(
+    draw: ImageDraw.ImageDraw,
+    location: str,
+    now: dt.datetime,
+    battery_volts: Optional[float] = None,
+) -> None:
     font = _font("FiraSans-Bold.ttf", 40)
     draw.text((24, 8), location, font=font, fill=0)
     stamp = now.strftime("%a %d.%m  %H:%M")
     draw.text((WIDTH - 24, 8), stamp, font=font, fill=0, anchor="ra")
+    if battery_volts is not None:
+        _draw_battery(draw, battery_volts, WIDTH - 24 - int(font.getlength(stamp)) - 24)
     draw.line([(0, 64), (WIDTH, 64)], fill=0, width=2)
 
 

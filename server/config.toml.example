@@ -20,6 +20,8 @@ render_interval_s = 900
 # only if the cached buffer is older than this many seconds. Browser
 # auto-refresh and burst polls within the window reuse the cache.
 min_render_interval_s = 60
+# Hide the battery gauge if the device hasn't reported for this many seconds.
+battery_stale_s = 3600
 
 [location]
 # Where met.no fetches the forecast for. Display also shows this label.

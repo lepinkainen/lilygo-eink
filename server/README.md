@@ -58,6 +58,7 @@ Env-var pattern: `LILYGO_<SECTION>__<KEY>` (uppercased, double underscore betwee
 | `metno.email` | `LILYGO_METNO__EMAIL` |
 | `server.port` | `LILYGO_SERVER__PORT` |
 | `server.render_interval_s` | `LILYGO_SERVER__RENDER_INTERVAL_S` |
+| `server.battery_stale_s` | `LILYGO_SERVER__BATTERY_STALE_S` |
 | `ha.token` | `LILYGO_HA__TOKEN` |
 
 The met.no User-Agent is built as `lilygo-eink/<version> <email>`; only supply the email, not the whole UA string.

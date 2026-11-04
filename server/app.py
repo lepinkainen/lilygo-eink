@@ -10,10 +10,12 @@ import argparse
 import datetime as dt
 import email.utils
 import logging
+import math
 import pathlib
 import sys
 import threading
 import time
+import urllib.parse
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -29,7 +31,7 @@ from pydantic_settings import (
 
 from ha import HAClient, IndoorReading
 from metno import MetNoClient
-from render import PACKED_SIZE, render, unpack_4bit
+from render import PACKED_SIZE, battery_key, render, unpack_4bit
 
 
 log = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ class ServerCfg(BaseModel):
     port: int = 8080
     render_interval_s: int = 900
     min_render_interval_s: int = 60
+    battery_stale_s: int = 3600
 
 
 class LocationCfg(BaseModel):
@@ -107,7 +110,7 @@ class Settings(BaseSettings):
 class State:
     """Single source of truth for the current rendered image + metadata."""
 
-    def __init__(self) -> None:
+    def __init__(self, battery_stale_s: int = 3600) -> None:
         self.lock = threading.Lock()
         # Start fully white so a poll during the first render returns valid bytes.
         self.buf: bytes = bytes([0xFF] * PACKED_SIZE)
@@ -118,6 +121,34 @@ class State:
         self.last_render_monotonic: float = 0.0
         # Guards _tick from running concurrently when multiple GETs race.
         self.render_lock = threading.Lock()
+        # Latest voltage reported by the device. Other clients (browsers,
+        # the background loop) render with this value until it goes stale.
+        self.battery_stale_s = battery_stale_s
+        self.battery_volts: float | None = None
+        self.battery_at_monotonic: float = 0.0
+        self.rendered_battery_key: str | None = None
+
+    def record_battery(self, volts: float) -> None:
+        with self.lock:
+            self.battery_volts = volts
+            self.battery_at_monotonic = time.monotonic()
+
+    def current_battery(self) -> float | None:
+        with self.lock:
+            age = time.monotonic() - self.battery_at_monotonic
+            return self.battery_volts if age < self.battery_stale_s else None
+
+
+def _parse_battery(query: str) -> float | None:
+    """Volts from the device's `batt` query parameter; None if unusable."""
+    values = urllib.parse.parse_qs(query).get("batt")
+    if not values:
+        return None
+    try:
+        volts = float(values[0])
+    except ValueError:
+        return None
+    return volts if math.isfinite(volts) and 0.0 < volts < 6.0 else None
 
 
 def _load_settings(toml_path: pathlib.Path) -> Settings:
@@ -146,8 +177,9 @@ def _tick(
             else "no data yet"
         )
         error = f"WEATHER DATA UNAVAILABLE \u2014 {since}"
+    battery_volts = state.current_battery()
     try:
-        buf = render(snap, indoor, location_name, tz, error)
+        buf = render(snap, indoor, location_name, tz, error, battery_volts)
     except Exception:
         log.exception("render failed; keeping previous frame")
         return
@@ -155,6 +187,7 @@ def _tick(
         state.buf = buf
         state.last_modified = email.utils.formatdate(usegmt=True)
         state.last_render_monotonic = time.monotonic()
+        state.rendered_battery_key = battery_key(battery_volts)
     log.info(
         "rendered: temp=%s indoor=%s sym=%s metno_err=%s",
         snap.temp if snap else "n/a",
@@ -192,9 +225,11 @@ def _make_handler(
         # Inside the lock we re-check the age so the second caller through
         # the door reuses the buffer the first caller just produced.
         with state.render_lock:
+            battery = battery_key(state.current_battery())
             with state.lock:
                 age = time.monotonic() - state.last_render_monotonic
-            if age < min_render_interval_s:
+                battery_changed = battery != state.rendered_battery_key
+            if age < min_render_interval_s and not battery_changed:
                 return
             _tick(state, metno, ha, location_name, tz)
 
@@ -213,8 +248,11 @@ def _make_handler(
                 log.debug("client disconnected mid-response: %s", exc)
 
         def do_GET(self) -> None:  # noqa: N802 — http.server contract
-            path = self.path.split("?", 1)[0]
+            path, _, query = self.path.partition("?")
             if path == "/eink.bin":
+                volts = _parse_battery(query)
+                if volts is not None:
+                    state.record_battery(volts)
                 _maybe_render()
                 self._serve_raw()
             elif path == "/preview.png":
@@ -320,6 +358,11 @@ def main(argv: list[str] | None = None) -> int:
         type=pathlib.Path,
         help="Render once and save a PNG preview to this path. Skips the HTTP server.",
     )
+    parser.add_argument(
+        "--battery",
+        type=float,
+        help="Fake battery voltage for --preview, e.g. 3.85.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -329,9 +372,11 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = _load_settings(args.config)
     metno, ha, location_name, tz = _build_clients(settings)
-    state = State()
+    state = State(settings.server.battery_stale_s)
 
     if args.preview is not None:
+        if args.battery is not None:
+            state.record_battery(args.battery)
         _tick(state, metno, ha, location_name, tz)
         unpack_4bit(state.buf).save(args.preview)
         log.info("wrote preview to %s", args.preview)
